@@ -475,131 +475,135 @@
                 // Clean room ID
                 roomId = roomId.replace(/[^A-Z0-9]/g, '');
 
-                updateSyncStatus('Mencari data...', false);
+                updateSyncStatus('🔍 Mencari data...', false);
 
                 let data = null;
                 let success = false;
 
-                // Method 1: Try JSONBin.io
-                const binId = localStorage.getItem(`remi_bin_${roomId}`);
-                if (binId) {
+                // Method 1: Quick localStorage check first (fastest)
+                updateSyncStatus('📱 Cek penyimpanan lokal...', false);
+                const variations = [
+                    `remi_room_${roomId}`,
+                    `remi_share_${roomId}`
+                ];
+
+                for (let key of variations) {
+                    const localData = localStorage.getItem(key);
+                    if (localData) {
+                        try {
+                            data = JSON.parse(localData);
+                            success = true;
+                            break;
+                        } catch (e) {
+                            continue;
+                        }
+                    }
+                }
+
+                // Method 2: Try IndexedDB with timeout
+                if (!success) {
+                    updateSyncStatus('💾 Cek database browser...', false);
                     try {
-                        const response = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`);
-                        if (response.ok) {
-                            const result = await response.json();
-                            data = result.record;
+                        const dbPromise = new Promise((resolve, reject) => {
+                            const request = indexedDB.open('RemiGameDB', 1);
+                            const timeout = setTimeout(() => reject(new Error('timeout')), 2000);
+                            
+                            request.onsuccess = function(e) {
+                                clearTimeout(timeout);
+                                const db = e.target.result;
+                                if (db.objectStoreNames.contains('rooms')) {
+                                    const transaction = db.transaction(['rooms'], 'readonly');
+                                    const store = transaction.objectStore('rooms');
+                                    const getRequest = store.get(roomId);
+                                    
+                                    getRequest.onsuccess = function() {
+                                        if (getRequest.result) {
+                                            resolve(getRequest.result.data);
+                                        } else {
+                                            resolve(null);
+                                        }
+                                    };
+                                    
+                                    getRequest.onerror = () => resolve(null);
+                                } else {
+                                    resolve(null);
+                                }
+                            };
+                            
+                            request.onerror = () => {
+                                clearTimeout(timeout);
+                                resolve(null);
+                            };
+                        });
+
+                        const dbResult = await dbPromise;
+                        if (dbResult) {
+                            data = dbResult;
                             success = true;
                         }
                     } catch (e) {
-                        console.log('JSONBin download failed');
+                        console.log('IndexedDB failed or timeout');
                     }
                 }
 
-                // Method 2: Try IndexedDB
+                // Method 3: Try JSONBin.io with timeout
                 if (!success) {
-                    try {
-                        const request = indexedDB.open('RemiGameDB', 1);
-                        request.onsuccess = function(e) {
-                            const db = e.target.result;
-                            if (db.objectStoreNames.contains('rooms')) {
-                                const transaction = db.transaction(['rooms'], 'readonly');
-                                const store = transaction.objectStore('rooms');
-                                const getRequest = store.get(roomId);
-                                
-                                getRequest.onsuccess = function() {
-                                    if (getRequest.result) {
-                                        data = getRequest.result.data;
-                                        success = true;
-                                        processDownloadedData();
-                                    }
-                                };
+                    updateSyncStatus('☁️ Cek server online...', false);
+                    const binId = localStorage.getItem(`remi_bin_${roomId}`);
+                    if (binId) {
+                        try {
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 3000);
+                            
+                            const response = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
+                                signal: controller.signal
+                            });
+                            
+                            clearTimeout(timeoutId);
+                            
+                            if (response.ok) {
+                                const result = await response.json();
+                                data = result.record;
+                                success = true;
                             }
-                        };
-                        
-                        // Wait a bit for IndexedDB
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                    } catch (e) {
-                        console.log('IndexedDB failed');
-                    }
-                }
-
-                // Method 3: Try localStorage variations
-                if (!success) {
-                    const variations = [
-                        `remi_room_${roomId}`,
-                        `remi_share_${roomId}`,
-                        `remi_code_${roomId}_*`
-                    ];
-
-                    for (let key of variations) {
-                        if (key.includes('*')) {
-                            // Search for keys that start with the pattern
-                            for (let i = 0; i < localStorage.length; i++) {
-                                const storageKey = localStorage.key(i);
-                                if (storageKey && storageKey.startsWith(key.replace('*', ''))) {
-                                    const localData = localStorage.getItem(storageKey);
-                                    if (localData) {
-                                        try {
-                                            data = JSON.parse(localData);
-                                            success = true;
-                                            break;
-                                        } catch (e) {
-                                            continue;
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            const localData = localStorage.getItem(key);
-                            if (localData) {
-                                try {
-                                    data = JSON.parse(localData);
-                                    success = true;
-                                    break;
-                                } catch (e) {
-                                    continue;
-                                }
-                            }
+                        } catch (e) {
+                            console.log('JSONBin download failed or timeout');
                         }
                     }
                 }
 
-                function processDownloadedData() {
-                    if (!success || !data) {
-                        updateSyncStatus('❌ Room ID tidak ditemukan! Pastikan sudah diupload dari perangkat lain.', true);
-                        return;
-                    }
-
-                    // Handle nested data structure
-                    if (data.data && data.data.players) {
-                        data = data.data;
-                    }
-
-                    if (!data.players || !Array.isArray(data.players)) {
-                        updateSyncStatus('❌ Format data tidak valid!', true);
-                        return;
-                    }
-
-                    if (confirm('Download data akan mengganti semua data yang ada. Lanjutkan?')) {
-                        players = data.players;
-                        history = data.history || [];
-                        
-                        // Save room ID for future use
-                        localStorage.setItem('remiRoomId', roomId);
-                        
-                        saveToLocalStorage();
-                        renderPlayers();
-                        renderHistory();
-                        
-                        updateSyncStatus('✅ Data berhasil didownload!', false);
-                    } else {
-                        updateSyncStatus('Download dibatalkan', false);
-                    }
+                // Process results
+                if (!success || !data) {
+                    updateSyncStatus('❌ Room ID tidak ditemukan! Pastikan sudah diupload dari perangkat lain.', true);
+                    return;
                 }
 
-                // Process the data if we found it synchronously
-                if (success) {
-                    processDownloadedData();
+                // Handle nested data structure
+                if (data.data && data.data.players) {
+                    data = data.data;
+                }
+
+                if (!data.players || !Array.isArray(data.players)) {
+                    updateSyncStatus('❌ Format data tidak valid!', true);
+                    return;
+                }
+
+                updateSyncStatus('✅ Data ditemukan! Konfirmasi download...', false);
+
+                if (confirm('Download data akan mengganti semua data yang ada. Lanjutkan?')) {
+                    players = data.players;
+                    history = data.history || [];
+                    
+                    // Save room ID for future use
+                    localStorage.setItem('remiRoomId', roomId);
+                    
+                    saveToLocalStorage();
+                    renderPlayers();
+                    renderHistory();
+                    
+                    updateSyncStatus('✅ Data berhasil didownload!', false);
+                } else {
+                    updateSyncStatus('Download dibatalkan', false);
                 }
 
             } catch (error) {
@@ -900,5 +904,5 @@
         renderPlayers();
         renderHistory();
     </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'975b066677aed47b',t:'MTc1NjI5MjAwNS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'975b0e2203e0cdfe',t:'MTc1NjI5MjMyMS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
