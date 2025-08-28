@@ -697,8 +697,42 @@
             switch (serverType) {
                 case 'jsonbin':
                     updateSyncStatus('☁️ Download dari JSONBin Premium...', false);
-                    const binId = localStorage.getItem(`remi_bin_${roomId}`);
-                    if (!binId) throw new Error('Bin ID tidak ditemukan');
+                    
+                    // Try multiple ways to find the bin ID
+                    let binId = localStorage.getItem(`remi_bin_${roomId}`);
+                    
+                    // If no bin ID found, try searching by name
+                    if (!binId) {
+                        updateSyncStatus('🔍 Mencari data di JSONBin...', false);
+                        try {
+                            // Search for bins with the room name
+                            const searchResponse = await fetch('https://api.jsonbin.io/v3/b', {
+                                headers: {
+                                    'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K'
+                                }
+                            });
+                            
+                            if (searchResponse.ok) {
+                                const bins = await searchResponse.json();
+                                // Look for bin with matching name
+                                const matchingBin = bins.find(bin => 
+                                    bin.name && bin.name.includes(roomId) || 
+                                    bin.name && bin.name.includes(`remi-game-${roomId}`)
+                                );
+                                
+                                if (matchingBin) {
+                                    binId = matchingBin.id;
+                                    localStorage.setItem(`remi_bin_${roomId}`, binId);
+                                }
+                            }
+                        } catch (e) {
+                            console.log('Search bins failed:', e);
+                        }
+                    }
+                    
+                    if (!binId) {
+                        throw new Error(`Room ID "${roomId}" tidak ditemukan di JSONBin. Pastikan sudah diupload atau coba server lain.`);
+                    }
                     
                     const response = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
                         headers: {
@@ -712,8 +746,10 @@
                         if (extracted) {
                             return { success: true, data: extracted, server: 'JSONBin Premium' };
                         }
+                    } else {
+                        console.error('JSONBin download error:', response.status, await response.text());
                     }
-                    throw new Error('Data tidak valid dari JSONBin');
+                    throw new Error(`Data tidak valid dari JSONBin (${response.status})`);
 
                 case 'pasteee':
                     updateSyncStatus('☁️ Download dari Paste.ee Premium...', false);
@@ -1184,5 +1220,5 @@
         renderPlayers();
         renderHistory();
     </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'97635f215426df69',t:'MTc1NjM3OTUyNS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9763637eb593f924',t:'MTc1NjM3OTcwNC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
