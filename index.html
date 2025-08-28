@@ -550,23 +550,70 @@
 
                 let data = null;
                 let success = false;
+                let foundMethod = '';
+
+                // Helper function to extract and validate game data
+                function extractGameData(rawData) {
+                    if (!rawData) return null;
+                    
+                    // Try different data structures
+                    let gameData = null;
+                    
+                    // Direct structure
+                    if (rawData.players && Array.isArray(rawData.players)) {
+                        gameData = rawData;
+                    }
+                    // Nested in gameData
+                    else if (rawData.gameData && rawData.gameData.players) {
+                        gameData = rawData.gameData;
+                    }
+                    // Nested in data
+                    else if (rawData.data && rawData.data.players) {
+                        gameData = rawData.data;
+                    }
+                    // Nested deeper
+                    else if (rawData.record && rawData.record.gameData && rawData.record.gameData.players) {
+                        gameData = rawData.record.gameData;
+                    }
+                    // JSONBin structure
+                    else if (rawData.record && rawData.record.players) {
+                        gameData = rawData.record;
+                    }
+                    
+                    // Validate structure
+                    if (gameData && gameData.players && Array.isArray(gameData.players)) {
+                        return {
+                            players: gameData.players,
+                            history: gameData.history || [],
+                            lastUpdated: gameData.lastUpdated || new Date().toISOString()
+                        };
+                    }
+                    
+                    return null;
+                }
 
                 // Method 1: Quick localStorage check first (fastest)
                 updateSyncStatus('📱 Cek penyimpanan lokal...', false);
-                const variations = [
+                const localVariations = [
                     `remi_room_${roomId}`,
                     `remi_share_${roomId}`,
-                    `remi_backup_${roomId}`
+                    `remi_backup_${roomId}`,
+                    `remiGameData_${roomId}`,
+                    `remi-${roomId}`
                 ];
 
-                for (let key of variations) {
+                for (let key of localVariations) {
                     const localData = localStorage.getItem(key);
                     if (localData) {
                         try {
                             const parsed = JSON.parse(localData);
-                            data = parsed.gameData || parsed;
-                            success = true;
-                            break;
+                            const extracted = extractGameData(parsed);
+                            if (extracted) {
+                                data = extracted;
+                                success = true;
+                                foundMethod = 'Local Storage';
+                                break;
+                            }
                         } catch (e) {
                             continue;
                         }
@@ -590,11 +637,7 @@
                                     const getRequest = store.get(roomId);
                                     
                                     getRequest.onsuccess = function() {
-                                        if (getRequest.result) {
-                                            resolve(getRequest.result.data);
-                                        } else {
-                                            resolve(null);
-                                        }
+                                        resolve(getRequest.result);
                                     };
                                     
                                     getRequest.onerror = () => resolve(null);
@@ -610,23 +653,29 @@
                         });
 
                         const dbResult = await dbPromise;
-                        if (dbResult && dbResult.gameData) {
-                            data = dbResult.gameData;
-                            success = true;
+                        if (dbResult) {
+                            const extracted = extractGameData(dbResult.data || dbResult);
+                            if (extracted) {
+                                data = extracted;
+                                success = true;
+                                foundMethod = 'IndexedDB';
+                            }
                         }
                     } catch (e) {
                         console.log('IndexedDB failed or timeout');
                     }
                 }
 
-                // Method 3: Try JSONBin.io Premium with timeout
+                // Method 3: Try JSONBin.io Premium - search by name first
                 if (!success) {
                     updateSyncStatus('☁️ Cek JSONBin Premium...', false);
+                    
+                    // First try with saved bin ID
                     const binId = localStorage.getItem(`remi_bin_${roomId}`);
                     if (binId) {
                         try {
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 3000);
+                            const timeoutId = setTimeout(() => controller.abort(), 5000);
                             
                             const response = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
                                 signal: controller.signal,
@@ -640,11 +689,67 @@
                             
                             if (response.ok) {
                                 const result = await response.json();
-                                data = result.record.gameData || result.record;
-                                success = true;
+                                const extracted = extractGameData(result);
+                                if (extracted) {
+                                    data = extracted;
+                                    success = true;
+                                    foundMethod = 'JSONBin Premium (ID)';
+                                }
                             }
                         } catch (e) {
-                            console.log('JSONBin download failed or timeout');
+                            console.log('JSONBin by ID failed:', e.message);
+                        }
+                    }
+                    
+                    // If not found by ID, search by name
+                    if (!success) {
+                        try {
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 5000);
+                            
+                            // Search for bins with the room name
+                            const searchResponse = await fetch('https://api.jsonbin.io/v3/b', {
+                                signal: controller.signal,
+                                headers: {
+                                    'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K',
+                                    'X-Access-Key': '$2a$10$cZzdyg/rQnYLAgr5r4x3W.TXah5nkIyofS87fUWFYTnTsrbPYzN4i'
+                                }
+                            });
+                            
+                            clearTimeout(timeoutId);
+                            
+                            if (searchResponse.ok) {
+                                const bins = await searchResponse.json();
+                                
+                                // Look for bin with matching name
+                                const targetBin = bins.find(bin => 
+                                    bin.name && bin.name.toLowerCase().includes(`remi-${roomId.toLowerCase()}`)
+                                );
+                                
+                                if (targetBin) {
+                                    // Fetch the specific bin
+                                    const binResponse = await fetch(`https://api.jsonbin.io/v3/b/${targetBin.id}/latest`, {
+                                        headers: {
+                                            'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K',
+                                            'X-Access-Key': '$2a$10$cZzdyg/rQnYLAgr5r4x3W.TXah5nkIyofS87fUWFYTnTsrbPYzN4i'
+                                        }
+                                    });
+                                    
+                                    if (binResponse.ok) {
+                                        const result = await binResponse.json();
+                                        const extracted = extractGameData(result);
+                                        if (extracted) {
+                                            data = extracted;
+                                            success = true;
+                                            foundMethod = 'JSONBin Premium (Search)';
+                                            // Save the bin ID for future use
+                                            localStorage.setItem(`remi_bin_${roomId}`, targetBin.id);
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.log('JSONBin search failed:', e.message);
                         }
                     }
                 }
@@ -656,7 +761,7 @@
                     if (gistId) {
                         try {
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 3000);
+                            const timeoutId = setTimeout(() => controller.abort(), 5000);
                             
                             const response = await fetch(`https://api.github.com/gists/${gistId}`, {
                                 signal: controller.signal
@@ -668,11 +773,15 @@
                                 const result = await response.json();
                                 const fileName = Object.keys(result.files)[0];
                                 const content = JSON.parse(result.files[fileName].content);
-                                data = content.gameData || content;
-                                success = true;
+                                const extracted = extractGameData(content);
+                                if (extracted) {
+                                    data = extracted;
+                                    success = true;
+                                    foundMethod = 'GitHub Gist';
+                                }
                             }
                         } catch (e) {
-                            console.log('GitHub Gist download failed or timeout');
+                            console.log('GitHub Gist download failed:', e.message);
                         }
                     }
                 }
@@ -684,7 +793,7 @@
                     if (pasteId) {
                         try {
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 3000);
+                            const timeoutId = setTimeout(() => controller.abort(), 5000);
                             
                             const response = await fetch(`https://api.paste.ee/v1/pastes/${pasteId}`, {
                                 signal: controller.signal
@@ -695,11 +804,15 @@
                             if (response.ok) {
                                 const result = await response.json();
                                 const content = JSON.parse(result.paste.sections[0].contents);
-                                data = content.gameData || content;
-                                success = true;
+                                const extracted = extractGameData(content);
+                                if (extracted) {
+                                    data = extracted;
+                                    success = true;
+                                    foundMethod = 'Paste.ee';
+                                }
                             }
                         } catch (e) {
-                            console.log('Paste.ee download failed or timeout');
+                            console.log('Paste.ee download failed:', e.message);
                         }
                     }
                 }
@@ -711,7 +824,7 @@
                     if (pasteId) {
                         try {
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 3000);
+                            const timeoutId = setTimeout(() => controller.abort(), 5000);
                             
                             const response = await fetch(`https://dpaste.org/${pasteId}.txt`, {
                                 signal: controller.signal
@@ -722,34 +835,68 @@
                             if (response.ok) {
                                 const content = await response.text();
                                 const parsed = JSON.parse(content);
-                                data = parsed.gameData || parsed;
-                                success = true;
+                                const extracted = extractGameData(parsed);
+                                if (extracted) {
+                                    data = extracted;
+                                    success = true;
+                                    foundMethod = 'dpaste';
+                                }
                             }
                         } catch (e) {
-                            console.log('dpaste download failed or timeout');
+                            console.log('dpaste download failed:', e.message);
                         }
+                    }
+                }
+
+                // Method 7: Try alternative localStorage keys (case variations)
+                if (!success) {
+                    updateSyncStatus('🔍 Cek variasi Room ID...', false);
+                    const alternativeKeys = [
+                        roomId.toLowerCase(),
+                        roomId.toUpperCase(),
+                        `REMI${roomId}`,
+                        `remi${roomId.toLowerCase()}`,
+                        `game_${roomId}`,
+                        `room_${roomId}`
+                    ];
+                    
+                    for (let altId of alternativeKeys) {
+                        for (let prefix of ['remi_room_', 'remi_share_', 'remi_backup_', 'remiGameData_']) {
+                            const key = prefix + altId;
+                            const localData = localStorage.getItem(key);
+                            if (localData) {
+                                try {
+                                    const parsed = JSON.parse(localData);
+                                    const extracted = extractGameData(parsed);
+                                    if (extracted) {
+                                        data = extracted;
+                                        success = true;
+                                        foundMethod = `Local Storage (${altId})`;
+                                        break;
+                                    }
+                                } catch (e) {
+                                    continue;
+                                }
+                            }
+                        }
+                        if (success) break;
                     }
                 }
 
                 // Process results
                 if (!success || !data) {
-                    updateSyncStatus('❌ Room ID tidak ditemukan! Pastikan sudah diupload dari perangkat lain.', true);
+                    updateSyncStatus('❌ Room ID tidak ditemukan! Pastikan Room ID benar dan sudah diupload.', true);
+                    
+                    // Show helpful message
+                    setTimeout(() => {
+                        updateSyncStatus('💡 Tips: Coba Room ID yang berbeda atau upload data terlebih dahulu', false);
+                    }, 3000);
                     return;
                 }
 
-                // Handle nested data structure
-                if (data.data && data.data.players) {
-                    data = data.data;
-                }
+                updateSyncStatus(`✅ Data ditemukan via ${foundMethod}! Konfirmasi download...`, false);
 
-                if (!data.players || !Array.isArray(data.players)) {
-                    updateSyncStatus('❌ Format data tidak valid!', true);
-                    return;
-                }
-
-                updateSyncStatus('✅ Data ditemukan! Konfirmasi download...', false);
-
-                if (confirm('Download data akan mengganti semua data yang ada. Lanjutkan?')) {
+                if (confirm(`Data ditemukan via ${foundMethod}!\n\nPemain: ${data.players.length}\nRiwayat: ${data.history.length} entri\n\nDownload akan mengganti semua data yang ada. Lanjutkan?`)) {
                     players = data.players;
                     history = data.history || [];
                     
@@ -760,7 +907,7 @@
                     renderPlayers();
                     renderHistory();
                     
-                    updateSyncStatus('✅ Data berhasil didownload!', false);
+                    updateSyncStatus(`✅ Data berhasil didownload dari ${foundMethod}!`, false);
                 } else {
                     updateSyncStatus('Download dibatalkan', false);
                 }
@@ -1053,5 +1200,5 @@
         renderPlayers();
         renderHistory();
     </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'97631449322afd93',t:'MTc1NjM3NjQ2MC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'97631c54a28340c6',t:'MTc1NjM3Njc4OS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
