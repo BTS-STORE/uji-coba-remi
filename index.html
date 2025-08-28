@@ -335,34 +335,48 @@
                 let success = false;
                 let uploadUrl = '';
 
-                // Method 1: Try JSONBin.io (reliable service with API key)
+                // Method 1: Try JSONBin.io (Free tier with proper structure)
                 try {
-                    updateSyncStatus('📤 Upload ke JSONBin Premium...', false);
+                    updateSyncStatus('📤 Upload ke JSONBin...', false);
+                    
+                    // Create the payload with proper structure
+                    const payload = {
+                        roomId: roomId,
+                        gameData: data,
+                        timestamp: Date.now(),
+                        searchKey: `remi-game-${roomId}` // For easier searching
+                    };
+
                     const response = await fetch('https://api.jsonbin.io/v3/b', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                             'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K',
-                            'X-Access-Key': '$2a$10$cZzdyg/rQnYLAgr5r4x3W.TXah5nkIyofS87fUWFYTnTsrbPYzN4i',
-                            'X-Bin-Name': `remi-${roomId}`,
-                            'X-Bin-Private': 'false'
+                            'X-Bin-Name': `remi-game-${roomId}`,
+                            'X-Bin-Private': 'false',
+                            'X-Collection-Id': '674b8e15ad19ca34f8c8f8c5'
                         },
-                        body: JSON.stringify({
-                            roomId: roomId,
-                            gameData: data,
-                            timestamp: Date.now()
-                        })
+                        body: JSON.stringify(payload)
                     });
 
                     if (response.ok) {
                         const result = await response.json();
-                        const binId = result.metadata.id;
-                        localStorage.setItem(`remi_bin_${roomId}`, binId);
-                        uploadUrl = `https://api.jsonbin.io/v3/b/${binId}`;
-                        success = true;
+                        console.log('JSONBin upload success:', result);
+                        
+                        const binId = result.metadata?.id || result.id;
+                        if (binId) {
+                            localStorage.setItem(`remi_bin_${roomId}`, binId);
+                            localStorage.setItem(`remi_bin_url_${roomId}`, `https://api.jsonbin.io/v3/b/${binId}`);
+                            uploadUrl = `https://api.jsonbin.io/v3/b/${binId}`;
+                            success = true;
+                            console.log('Saved bin ID:', binId);
+                        }
+                    } else {
+                        const errorText = await response.text();
+                        console.log('JSONBin error response:', response.status, errorText);
                     }
                 } catch (e) {
-                    console.log('JSONBin failed, trying next...');
+                    console.log('JSONBin failed:', e);
                 }
 
                 // Method 2: Try GitHub Gist (anonymous)
@@ -666,90 +680,147 @@
                     }
                 }
 
-                // Method 3: Try JSONBin.io Premium - search by name first
+                // Method 3: Try JSONBin.io - improved approach
                 if (!success) {
-                    updateSyncStatus('☁️ Cek JSONBin Premium...', false);
+                    updateSyncStatus('☁️ Cek JSONBin...', false);
                     
                     // First try with saved bin ID
                     const binId = localStorage.getItem(`remi_bin_${roomId}`);
                     if (binId) {
                         try {
+                            console.log('Trying JSONBin with saved ID:', binId);
+                            
                             const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 5000);
+                            const timeoutId = setTimeout(() => controller.abort(), 8000);
                             
                             const response = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
                                 signal: controller.signal,
                                 headers: {
-                                    'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K',
-                                    'X-Access-Key': '$2a$10$cZzdyg/rQnYLAgr5r4x3W.TXah5nkIyofS87fUWFYTnTsrbPYzN4i'
+                                    'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K'
                                 }
                             });
                             
                             clearTimeout(timeoutId);
                             
+                            console.log('JSONBin response status:', response.status);
+                            
                             if (response.ok) {
                                 const result = await response.json();
+                                console.log('JSONBin result:', result);
+                                
                                 const extracted = extractGameData(result);
                                 if (extracted) {
                                     data = extracted;
                                     success = true;
-                                    foundMethod = 'JSONBin Premium (ID)';
+                                    foundMethod = 'JSONBin (Saved ID)';
+                                    console.log('Data extracted successfully from JSONBin');
                                 }
+                            } else {
+                                console.log('JSONBin response not ok:', await response.text());
                             }
                         } catch (e) {
                             console.log('JSONBin by ID failed:', e.message);
                         }
                     }
                     
-                    // If not found by ID, search by name
+                    // If not found by ID, try collection search
                     if (!success) {
                         try {
-                            const controller = new AbortController();
-                            const timeoutId = setTimeout(() => controller.abort(), 5000);
+                            console.log('Trying JSONBin collection search...');
                             
-                            // Search for bins with the room name
-                            const searchResponse = await fetch('https://api.jsonbin.io/v3/b', {
+                            const controller = new AbortController();
+                            const timeoutId = setTimeout(() => controller.abort(), 8000);
+                            
+                            // Try to get bins from collection
+                            const collectionResponse = await fetch('https://api.jsonbin.io/v3/c/674b8e15ad19ca34f8c8f8c5/bins', {
                                 signal: controller.signal,
                                 headers: {
-                                    'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K',
-                                    'X-Access-Key': '$2a$10$cZzdyg/rQnYLAgr5r4x3W.TXah5nkIyofS87fUWFYTnTsrbPYzN4i'
+                                    'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K'
                                 }
                             });
                             
                             clearTimeout(timeoutId);
                             
-                            if (searchResponse.ok) {
-                                const bins = await searchResponse.json();
+                            if (collectionResponse.ok) {
+                                const bins = await collectionResponse.json();
+                                console.log('Collection bins:', bins);
                                 
                                 // Look for bin with matching name
                                 const targetBin = bins.find(bin => 
-                                    bin.name && bin.name.toLowerCase().includes(`remi-${roomId.toLowerCase()}`)
+                                    bin.name && (
+                                        bin.name.toLowerCase().includes(`remi-game-${roomId.toLowerCase()}`) ||
+                                        bin.name.toLowerCase().includes(`remi-${roomId.toLowerCase()}`)
+                                    )
                                 );
+                                
+                                console.log('Target bin found:', targetBin);
                                 
                                 if (targetBin) {
                                     // Fetch the specific bin
                                     const binResponse = await fetch(`https://api.jsonbin.io/v3/b/${targetBin.id}/latest`, {
                                         headers: {
-                                            'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K',
-                                            'X-Access-Key': '$2a$10$cZzdyg/rQnYLAgr5r4x3W.TXah5nkIyofS87fUWFYTnTsrbPYzN4i'
+                                            'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K'
                                         }
                                     });
                                     
                                     if (binResponse.ok) {
                                         const result = await binResponse.json();
+                                        console.log('Bin content:', result);
+                                        
                                         const extracted = extractGameData(result);
                                         if (extracted) {
                                             data = extracted;
                                             success = true;
-                                            foundMethod = 'JSONBin Premium (Search)';
+                                            foundMethod = 'JSONBin (Collection Search)';
                                             // Save the bin ID for future use
                                             localStorage.setItem(`remi_bin_${roomId}`, targetBin.id);
+                                            console.log('Data found via collection search');
                                         }
                                     }
                                 }
                             }
                         } catch (e) {
-                            console.log('JSONBin search failed:', e.message);
+                            console.log('JSONBin collection search failed:', e.message);
+                        }
+                    }
+                    
+                    // Last resort: try direct bin access with different room ID variations
+                    if (!success) {
+                        const roomVariations = [
+                            roomId,
+                            roomId.toLowerCase(),
+                            `REMI${roomId}`,
+                            `remi${roomId.toLowerCase()}`
+                        ];
+                        
+                        for (let variation of roomVariations) {
+                            const altBinId = localStorage.getItem(`remi_bin_${variation}`);
+                            if (altBinId && altBinId !== binId) {
+                                try {
+                                    console.log('Trying alternative bin ID:', altBinId);
+                                    
+                                    const response = await fetch(`https://api.jsonbin.io/v3/b/${altBinId}/latest`, {
+                                        headers: {
+                                            'X-Master-Key': '$2a$10$PsbU/3jgHeApo.8Vwq4uUesrec7uXc879BjlWLEzXy4lzVkvlLi7K'
+                                        }
+                                    });
+                                    
+                                    if (response.ok) {
+                                        const result = await response.json();
+                                        const extracted = extractGameData(result);
+                                        if (extracted) {
+                                            data = extracted;
+                                            success = true;
+                                            foundMethod = `JSONBin (Alt: ${variation})`;
+                                            // Update the main room ID mapping
+                                            localStorage.setItem(`remi_bin_${roomId}`, altBinId);
+                                            break;
+                                        }
+                                    }
+                                } catch (e) {
+                                    console.log(`Alternative bin ${altBinId} failed:`, e.message);
+                                }
+                            }
                         }
                     }
                 }
@@ -1200,5 +1271,5 @@
         renderPlayers();
         renderHistory();
     </script>
-<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'97631c54a28340c6',t:'MTc1NjM3Njc4OS4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+<script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'97632643c2e61dad',t:'MTc1NjM3NzE5Ni4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
